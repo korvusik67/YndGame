@@ -77,19 +77,23 @@ export class WorldView {
   clearIsland():void {
     this.heroBody=null;this.heroMesh=null;this.portal=null;this.obstacles=[];
     this.scene.remove(this.islandObjects,this.effects);
-    this.disposeGroup(this.islandObjects);this.disposeGroup(this.effects);
+    this.disposeObject(this.islandObjects);this.disposeObject(this.effects);
     this.islandObjects=new THREE.Group();this.effects=new THREE.Group();
     this.scene.add(this.islandObjects,this.effects);
     this.physics=new RAPIER.World({x:0,y:-22,z:0});
     this.cloudGroups=[];
   }
-  private disposeGroup(group:THREE.Group):void {
-    group.traverse(o=>{
+  private disposeObject(object:THREE.Object3D):void {
+    object.traverse(o=>{
       if (!(o instanceof THREE.Mesh)) return;
       o.geometry.dispose();
       const materials=Array.isArray(o.material)?o.material:[o.material];
       materials.forEach(m=>m.dispose());
     });
+  }
+  removeVisual(object:THREE.Object3D):void {
+    object.removeFromParent();
+    this.disposeObject(object);
   }
   onIsland(x:number,z:number):boolean {
     const a=Math.atan2(z,x);
@@ -257,7 +261,7 @@ export class WorldView {
     return obstacle;
   }
   removeObstacle(o:Obstacle):void {
-    this.islandObjects.remove(o.mesh);
+    this.removeVisual(o.mesh);
     if(o.collider)this.physics.removeCollider(o.collider,true);
     o.collider=null;
     this.obstacles=this.obstacles.filter(x=>x!==o);
@@ -303,38 +307,171 @@ export class WorldView {
   }
   makeEnemy(kind:EnemyKind|Boss,boss=false):THREE.Group {
     const g=new THREE.Group();
-    const biome=BIOMES[kind.biome],b=kind as EnemyKind;
-    const scale=boss?2.7:b.elite?1.45:1;
-    const variant=boss?Number(kind.id.slice(1))-1:b.behavior;
-    const core=mesh(new THREE.DodecahedronGeometry(.5,variant%3===0?1:0),mat(biome.rock,.15,.55));
-    g.add(core);
-    const glow=ball(.33,biome.accent,0,.05,.27);
-    glow.material=emissive(biome.accent);g.add(glow);
-    for(const side of [-1,1]){
-      const wing=mesh(new THREE.ConeGeometry(.24,.95,5),mat(biome.accent,.1,.5),side*.7,.12,-.13);
-      wing.rotation.z=side*.9;wing.rotation.x=Math.PI/2;
-      g.add(wing);
-      const eye=ball(.075,0xfff5c4,side*.22,.14,.5,6);
-      eye.material=emissive(0xffe2ab);g.add(eye);
-    }
-    if(variant%3===1){
-      for(const side of [-1,1]) {
-        const horn=mesh(new THREE.ConeGeometry(.13,.55,6),mat(biome.accent),side*.3,.55,0);
-        horn.rotation.z=side*.45;g.add(horn);
-      }
-    }
-    if(variant%3===2){
-      const halo=ring(.65,.04,biome.accent,0,.35,0);halo.rotation.x=Math.PI/2.8;g.add(halo);
-    }
+    const biome=BIOMES[kind.biome];
+    const wings:THREE.Object3D[]=[];
+    const addGlow=(r:number,x:number,y:number,z:number)=>{
+      const o=mesh(new THREE.IcosahedronGeometry(r,1),emissive(biome.accent),x,y,z);
+      g.add(o);return o;
+    };
+    const addWing=(side:number,x:number,y:number,w:number,h:number)=>{
+      const o=ball(1,biome.accent,x,y,-.08);
+      o.scale.set(w,h,.11);
+      o.rotation.z=side*.24;
+      g.add(o);wings.push(o);return o;
+    };
     if(boss){
-      g.add(ring(.85,.06,biome.accent,0,0,0),ring(1.15,.04,biome.accent,0,.28,0));
-      for(let i=0;i<4;i++){
-        const a=i*Math.PI/2;
-        g.add(mesh(new THREE.OctahedronGeometry(.3),emissive(biome.accent),Math.sin(a)*1.1,Math.cos(a)*1.1,0));
+      const id=Number(kind.id.slice(1))-1;
+      if(id===0){
+        g.add(cylinder(.45,.8,1.5,0x6a5948,0,-.1,0,9));
+        g.add(ball(.73,0x4b805b,0,.9,0));
+        for(const side of [-1,1]){
+          const branch=cylinder(.12,.21,1.2,0x695744,side*.7,.25,0,7);
+          branch.rotation.z=side*.8;g.add(branch);
+          g.add(ball(.35,0x5c9466,side*1.14,.72,0));
+        }
+        addGlow(.28,0,.28,.7);
+      } else if(id===1){
+        g.add(mesh(new THREE.ConeGeometry(.8,1.8,10),mat(0x90c9df),0,-.42,0));
+        g.add(ball(.34,0xe4edf4,0,.68,0));
+        for(let i=0;i<5;i++){
+          const a=i*Math.PI*2/5;
+          g.add(mesh(new THREE.ConeGeometry(.12,.55,5),emissive(biome.accent),Math.sin(a)*.31,1.05,Math.cos(a)*.31));
+        }
+        g.add(ring(.77,.05,biome.accent,0,-.4,0));
+      } else if(id===2){
+        const body=ball(.66,0x6f7496);
+        body.scale.set(1,.7,1.3);g.add(body);
+        for(const side of [-1,1])for(let i=0;i<4;i++){
+          const wing=mesh(new THREE.ConeGeometry(.23,1.7-i*.18,6),mat(i%2?0x7aa6d2:0xb8b8ed),side*(.8+i*.3),.35-i*.12,-.2);
+          wing.rotation.z=side*1.15;g.add(wing);wings.push(wing);
+        }
+        const beak=mesh(new THREE.ConeGeometry(.2,.65,5),mat(0xe4bf75),0,-.12,.75);
+        beak.rotation.x=Math.PI/2;g.add(beak);
+        addGlow(.2,0,.16,.65);
+      } else if(id===3){
+        g.add(box(1.2,1.1,.85,0x443d43,0,0,0));
+        g.add(box(.78,.72,.7,0x50434a,0,.86,0));
+        for(const side of [-1,1]){
+          g.add(box(.42,.9,.5,0x3e3941,side*.86,-.2,0));
+          g.add(box(.36,.75,.45,0x332e38,side*.36,-.9,0));
+        }
+        addGlow(.32,0,.1,.55);
+      } else if(id===4){
+        g.add(mesh(new THREE.ConeGeometry(.77,1.8,9),mat(0x312d47),0,-.35,0));
+        g.add(ball(.31,0x504365,0,.67,0));
+        g.add(box(.55,.18,.42,0x30293e,0,.86,0));
+        const handle=cylinder(.045,.06,2.2,0x9a8fa2,.86,0,.1,7);
+        handle.rotation.z=-.22;g.add(handle);
+        const blade=mesh(new THREE.TorusGeometry(.56,.08,7,18,Math.PI*1.2),emissive(0xc99df1),.62,1.1,.1);
+        blade.rotation.z=.8;g.add(blade);
+        addGlow(.15,0,.57,.3);
+      } else if(id===5){
+        g.add(cylinder(.38,.64,1.4,0xf0d6a1,0,-.18,0,9));
+        g.add(ball(.32,0xffe4b5,0,.72,0));
+        for(const side of [-1,1])for(let i=0;i<3;i++){
+          const wing=ball(.55,0xf5d48d,side*(.65+i*.35),.55-i*.38,-.35);
+          wing.scale.set(1.5,.32,.25);wing.rotation.z=side*(.4+i*.2);
+          g.add(wing);wings.push(wing);
+        }
+        g.add(ring(.52,.055,0xffe4a0,0,1.12,0));
+        addGlow(.18,0,.25,.46);
+      } else {
+        const heart=mesh(new THREE.OctahedronGeometry(.8,1),emissive(0xc6a6ff));
+        heart.scale.set(1,1.22,.85);g.add(heart);
+        for(let i=0;i<3;i++){
+          const orbit=ring(1.18+i*.25,.055,biome.accent,0,0,0);
+          orbit.rotation.set(i*.8,.4+i*.7,i*.5);g.add(orbit);
+        }
+        for(let i=0;i<5;i++){
+          const a=i*Math.PI*2/5;
+          g.add(mesh(new THREE.OctahedronGeometry(.2),emissive(biome.accent),Math.sin(a)*1.45,Math.cos(a)*1.1,0));
+        }
       }
+      g.scale.setScalar(2.1);
+    } else {
+      const b=kind as EnemyKind;
+      switch(b.behavior){
+        case 0: {
+          const core=mesh(new THREE.ConeGeometry(.44,1.05,8),mat(biome.foliage),0,-.08,0);
+          core.rotation.x=Math.PI;g.add(core);addGlow(.23,0,.17,.27);
+          for(const side of [-1,1])addWing(side,side*.58,.16,.42,.22);
+          break;
+        }
+        case 1: {
+          const body=ball(.46,0xc9a45c);body.scale.set(.76,.7,1.45);g.add(body);
+          for(const z of [-.22,.05,.3])g.add(cylinder(.33,.33,.08,0x493e41,0,0,z,9));
+          for(const side of [-1,1])addWing(side,side*.47,.34,.37,.14);
+          const sting=mesh(new THREE.ConeGeometry(.1,.43,6),mat(0x473d3c),0,0,-.8);
+          sting.rotation.x=-Math.PI/2;g.add(sting);
+          break;
+        }
+        case 2: {
+          g.add(ball(.55,biome.rock));
+          const iris=ball(.36,0xf3e3b9,0,.03,.43);iris.scale.z=.3;g.add(iris);
+          addGlow(.17,0,.03,.55);
+          g.add(ring(.7,.045,biome.accent,0,0,0));
+          break;
+        }
+        case 3: {
+          const robe=mesh(new THREE.ConeGeometry(.57,1.2,9),mat(biome.rock),0,-.25,0);
+          robe.rotation.x=Math.PI;g.add(robe);
+          g.add(ball(.42,0x5d657f,0,.3,0));
+          for(const side of [-1,1])addGlow(.075,side*.16,.31,.37);
+          break;
+        }
+        case 4: {
+          g.add(mesh(new THREE.DodecahedronGeometry(.48),mat(biome.rock)));
+          for(let i=0;i<5;i++){
+            const a=i*Math.PI*2/5;
+            g.add(mesh(new THREE.OctahedronGeometry(.2),emissive(biome.accent),Math.sin(a)*.65,Math.cos(a)*.65,0));
+          }
+          break;
+        }
+        case 5: {
+          g.add(cylinder(.15,.2,.77,biome.rock,0,0,0,8));
+          for(const side of [-1,1]){
+            addWing(side,side*.44,.29,.45,.34);
+            addWing(side,side*.43,-.24,.38,.28);
+          }
+          addGlow(.14,0,.33,.16);
+          break;
+        }
+        case 6: {
+          g.add(ball(.49,biome.rock));
+          for(let i=0;i<8;i++){
+            const a=i*Math.PI/4;
+            const thorn=mesh(new THREE.ConeGeometry(.13,.55,6),mat(biome.accent),Math.sin(a)*.52,Math.cos(a)*.52,0);
+            thorn.rotation.z=-a;g.add(thorn);
+          }
+          addGlow(.17,0,0,.46);
+          break;
+        }
+        case 7: {
+          g.add(mesh(new THREE.OctahedronGeometry(.43),emissive(biome.accent)));
+          for(const side of [-1,1])addWing(side,side*.52,.02,.54,.4);
+          g.add(ring(.57,.035,biome.accent,0,.13,0));
+          break;
+        }
+        case 8: {
+          const lantern=ball(.43,biome.rock);lantern.scale.set(.83,1.2,.85);g.add(lantern);
+          addGlow(.31,0,-.14,.15);
+          for(const side of [-1,1])addWing(side,side*.43,.4,.33,.23);
+          break;
+        }
+        default: {
+          g.add(cylinder(.38,.5,.7,biome.rock,0,-.16,0,7));
+          g.add(mesh(new THREE.ConeGeometry(.38,.62,7),mat(biome.rock),0,.4,0));
+          addGlow(.17,0,.15,.38);
+          const halo=ring(.68,.045,biome.accent,0,.32,0);halo.rotation.x=.6;g.add(halo);
+        }
+      }
+      if(b.elite){
+        g.add(ring(.67,.045,biome.accent,0,-.62,0));
+        for(const side of [-1,1])g.add(mesh(new THREE.ConeGeometry(.12,.35,5),emissive(biome.accent),side*.27,.72,0));
+      }
+      g.scale.setScalar(b.elite?1.45:1);
     }
-    g.scale.setScalar(scale);
-    g.userData={wingL:g.children[2],wingR:g.children[3],baseY:1.5};
+    g.userData={wings,baseY:1.5};
     return g;
   }
   makeProjectile(color:number,r=.13):THREE.Group {

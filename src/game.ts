@@ -8,6 +8,7 @@ export type Reward={kind:'weapon'|'passive'|'active'|'stat';id:number;title:stri
 type Enemy={kind:EnemyKind|Boss;boss:boolean;mesh:THREE.Group;x:number;z:number;y:number;hp:number;maxHp:number;cooldown:number;phase:number;time:number;slow:number};
 type Projectile={mesh:THREE.Group;x:number;z:number;vx:number;vz:number;life:number;damage:number;hostile:boolean;radius:number};
 type Pickup={mesh:THREE.Group;x:number;z:number;kind:'hp'|'mana'|'ammo'|'coin';time:number};
+type Pulse={mesh:THREE.Mesh;age:number;duration:number;radius:number};
 type Save={version:1;heroIndex:number;island:number;seed:number;hp:number;mana:number;ammo:number;coins:number;xp:number;level:number;weapons:number[];clips:number[];passives:number[];active:number;damageBonus:number;speedBonus:number;maxHpBonus:number;maxManaBonus:number;kills:number};
 const SAVE_KEY='endless-islands-run-v1';
 const META_KEY='endless-islands-meta-v1';
@@ -24,6 +25,7 @@ export class Game {
   weapons=[0,-1];clips=[18,18];weaponSlot=0;passives:number[]=[];active=0;
   damageBonus=0;speedBonus=0;maxHpBonus=0;maxManaBonus=0;
   enemies:Enemy[]=[];projectiles:Projectile[]=[];pickups:Pickup[]=[];
+  pulses:Pulse[]=[];
   fireCooldown=0;skillCooldown=0;buff=0;speedBuff=0;shield=0;shieldTimer=30;invulnerable=0;dashCooldown=0;reload=0;reloadSlot=0;statusSlow=0;nextShotDouble=false;
   fireAura=0;whirlAura=0;orbAura=0;auraTick=0;
   rewardChoices:Reward[]=[];rewardRounds=1;transitioning=false;
@@ -103,10 +105,11 @@ export class Game {
     this.setMode(win?'won':'dead');
   }
   private clearActors():void {
-    for(const e of this.enemies)this.world.islandObjects.remove(e.mesh);
-    for(const p of this.projectiles)this.world.effects.remove(p.mesh);
-    for(const p of this.pickups)this.world.effects.remove(p.mesh);
-    this.enemies=[];this.projectiles=[];this.pickups=[];
+    for(const e of this.enemies)this.world.removeVisual(e.mesh);
+    for(const p of this.projectiles)this.world.removeVisual(p.mesh);
+    for(const p of this.pickups)this.world.removeVisual(p.mesh);
+    for(const p of this.pulses)this.world.removeVisual(p.mesh);
+    this.enemies=[];this.projectiles=[];this.pickups=[];this.pulses=[];
   }
   startIsland():void {
     this.transitioning=false;
@@ -179,10 +182,10 @@ export class Game {
   }
   private damageEnemy(e:Enemy,damage:number):void {
     if(e.kind.id.startsWith('X')&&this.passives.includes(18))damage*=1.08;
-    e.hp-=damage;e.mesh.scale.multiplyScalar(.995);
+    e.hp-=damage;
     if(this.passives.includes(6))this.hp=Math.min(this.maxHealth,this.hp+damage*.06);
     if(e.hp>0)return;
-    this.world.islandObjects.remove(e.mesh);
+    this.world.removeVisual(e.mesh);
     this.enemies=this.enemies.filter(x=>x!==e);
     this.kills++;this.xp+=e.boss?120:e.kind.id.startsWith('X')?35:12;
     this.coins+=Math.round((e.boss?80:e.kind.id.startsWith('X')?20:5)*(this.passives.includes(9)?1.2:1));
@@ -212,11 +215,32 @@ export class Game {
     const m=this.world.makePickup(kind);m.position.set(x,0,z);this.world.effects.add(m);
     this.pickups.push({mesh:m,x,z,kind,time:0});
   }
+  private pulse(x:number,z:number,radius:number,color=this.biome.accent):void {
+    const material=new THREE.MeshBasicMaterial({color,transparent:true,opacity:.8,depthWrite:false});
+    const m=new THREE.Mesh(new THREE.TorusGeometry(1,.035,6,36),material);
+    m.rotation.x=Math.PI/2;m.position.set(x,.16,z);
+    m.scale.setScalar(.15);
+    this.world.effects.add(m);
+    this.pulses.push({mesh:m,age:0,duration:.55,radius});
+  }
+  private updatePulses(dt:number):void {
+    for(const p of [...this.pulses]){
+      p.age+=dt;
+      const ratio=p.age/p.duration;
+      p.mesh.scale.setScalar(.15+p.radius*ratio);
+      (p.mesh.material as THREE.MeshBasicMaterial).opacity=Math.max(0,.8*(1-ratio));
+      if(ratio>=1){
+        this.world.removeVisual(p.mesh);
+        this.pulses.splice(this.pulses.indexOf(p),1);
+      }
+    }
+  }
   private useAbility(target:THREE.Vector3):void {
     if(this.skillCooldown>0||this.mana<this.ability.cost)return;
     const body=this.world.heroBody;if(!body)return;
     this.mana-=this.ability.cost;this.skillCooldown=this.ability.cooldown;
     const p=body.translation(),a=this.active;
+    this.pulse(p.x,p.z,a===0?1.5:a===12?5:3.5);
     if(a===0){
       const dx=target.x-p.x,dz=target.z-p.z,len=Math.hypot(dx,dz)||1;
       let x=p.x,z=p.z;
@@ -299,6 +323,11 @@ export class Game {
       e.mesh.position.set(e.x,1.7+Math.sin(e.time*3)*.18,e.z);
       e.mesh.rotation.y=Math.atan2(dx,dz);
       e.mesh.rotation.z=Math.sin(e.time*7)*.08;
+      const wings=e.mesh.userData.wings as THREE.Object3D[];
+      wings.forEach((wing,i)=>{
+        if(wing.userData.baseZ===undefined)wing.userData.baseZ=wing.rotation.z;
+        wing.rotation.z=(wing.userData.baseZ as number)+Math.sin(e.time*10+i*.6)*(i%2?-.23:.23);
+      });
     }
   }
   private updateProjectiles(dt:number,px:number,pz:number):void {
@@ -327,7 +356,7 @@ export class Game {
       }
       if(hit||p.life<=0||Math.hypot(p.x,p.z)>16){
         this.projectiles.splice(this.projectiles.indexOf(p),1);
-        this.world.effects.remove(p.mesh);
+        this.world.removeVisual(p.mesh);
       }
     }
   }
@@ -340,7 +369,7 @@ export class Game {
         if(p.kind==='mana')this.mana=Math.min(this.maxMagic,this.mana+25);
         if(p.kind==='ammo')this.ammo+=25;
         if(p.kind==='coin')this.coins+=15;
-        this.world.effects.remove(p.mesh);
+        this.world.removeVisual(p.mesh);
         this.pickups.splice(this.pickups.indexOf(p),1);
       }
     }
@@ -348,6 +377,7 @@ export class Game {
   update(dt:number):void {
     dt=Math.min(dt,.05);
     this.world.animate(dt,this.mode==='playing'&&this.moving());
+    if(this.mode==='playing')this.updatePulses(dt);
     this.world.render(dt,this.mode==='playing'||this.mode==='paused'||this.mode==='reward');
     if(this.toastTime>0)this.toastTime=Math.max(0,this.toastTime-dt);
     if(this.mode!=='playing')return;
@@ -405,6 +435,7 @@ export class Game {
       this.auraTick=.5;
       const radius=this.fireAura>0?3.4:this.whirlAura>0?3:5;
       const damage=this.fireAura>0?10:this.whirlAura>0?8:8;
+      this.pulse(p.x,p.z,radius,this.fireAura>0?0xff8c5c:this.whirlAura>0?0x9de6e7:0xb7a1ff);
       for(const e of [...this.enemies])if(Math.hypot(e.x-p.x,e.z-p.z)<radius)this.damageEnemy(e,damage);
     }
     this.updateProjectiles(dt,p.x,p.z);
